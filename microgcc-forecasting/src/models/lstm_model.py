@@ -9,14 +9,13 @@ warnings.filterwarnings("ignore")
 ARTIFACTS_DIR = Path(__file__).resolve().parents[2] / "artifacts"
 ARTIFACTS_DIR.mkdir(exist_ok=True)
 
-LOOKBACK   = 12   # weeks of history to feed into LSTM
-FORECAST_H = 8    # weeks to forecast
-EPOCHS     = 100
-BATCH_SIZE = 32
+LOOKBACK   = 12    # was 12 — captures 6 months of history
+FORECAST_H = 8
+EPOCHS     = 300   # was 100 — early stopping will kick in before this
+BATCH_SIZE = 16    # was 32 — smaller batches = better gradient updates on small series
 
 
 def build_sequences(series: np.ndarray, lookback: int):
-    """Convert a 1D series into (X, y) supervised sequences."""
     X, y = [], []
     for i in range(lookback, len(series)):
         X.append(series[i - lookback:i])
@@ -25,7 +24,6 @@ def build_sequences(series: np.ndarray, lookback: int):
 
 
 def scale_series(series: np.ndarray):
-    """MinMax scale to [0,1]. Returns scaled array, min, max."""
     s_min, s_max = series.min(), series.max()
     scaled = (series - s_min) / (s_max - s_min + 1e-8)
     return scaled, s_min, s_max
@@ -36,19 +34,24 @@ def inverse_scale(scaled, s_min, s_max):
 
 
 def build_lstm_model(lookback: int):
-    """Build a simple 2-layer LSTM model."""
     import tensorflow as tf
     from tensorflow.keras.models import Sequential
-    from tensorflow.keras.layers import LSTM, Dense, Dropout
+    from tensorflow.keras.layers import LSTM, Dense, Dropout, Bidirectional
 
     model = Sequential([
-        LSTM(64, return_sequences=True, input_shape=(lookback, 1)),
+        Bidirectional(LSTM(128, return_sequences=True), input_shape=(lookback, 1)),
+        Dropout(0.2),
+        LSTM(64, return_sequences=True),
         Dropout(0.2),
         LSTM(32, return_sequences=False),
-        Dropout(0.2),
+        Dropout(0.1),
+        Dense(16, activation='relu'),
         Dense(1),
     ])
-    model.compile(optimizer="adam", loss="mse")
+    model.compile(
+        optimizer=tf.keras.optimizers.Adam(learning_rate=0.001),
+        loss='huber',       # more robust to outliers than MSE
+    )
     return model
 
 
@@ -56,11 +59,10 @@ def train_lstm_per_state(
     train_df: pd.DataFrame,
     val_df:   pd.DataFrame,
 ) -> dict:
-    """
-    Train one LSTM per state. Returns dict of {state: (model, s_min, s_max)}.
-    Simpler and more accurate than a global model for this dataset size.
-    """
     import tensorflow as tf
+    from tensorflow.keras.callbacks import (
+        EarlyStopping, ReduceLROnPlateau
+    )
     tf.get_logger().setLevel("ERROR")
 
     states  = sorted(train_df["State"].unique())
@@ -69,7 +71,6 @@ def train_lstm_per_state(
     for i, state in enumerate(states, 1):
         print(f"  [{i:02d}/43] {state}...", end=" ", flush=True)
 
-        # Get full history (train + val) for sequence building
         full = pd.concat([
             train_df[train_df["State"] == state][["ds", "y"]],
             val_df[val_df["State"] == state][["ds", "y"]],
@@ -78,10 +79,8 @@ def train_lstm_per_state(
         series = full["y"].values.astype(float)
         scaled, s_min, s_max = scale_series(series)
 
-        # Split: train sequences from train portion only
-        n_train = len(train_df[train_df["State"] == state].dropna(subset=["y"]))
+        n_train      = len(train_df[train_df["State"] == state].dropna(subset=["y"]))
         train_scaled = scaled[:n_train]
-        val_scaled   = scaled[n_train:]
 
         X_train, y_train = build_sequences(train_scaled, LOOKBACK)
         X_train = X_train.reshape(-1, LOOKBACK, 1)
@@ -90,22 +89,46 @@ def train_lstm_per_state(
             print("SKIPPED (not enough data)")
             continue
 
+        # Validation sequences for early stopping
+        val_scaled = scaled[n_train - LOOKBACK:]
+        X_val, y_val = build_sequences(val_scaled, LOOKBACK)
+        X_val = X_val.reshape(-1, LOOKBACK, 1)
+
+        callbacks = [
+            EarlyStopping(
+                monitor='val_loss',
+                patience=20,
+                restore_best_weights=True,
+                verbose=0,
+            ),
+            ReduceLROnPlateau(
+                monitor='val_loss',
+                factor=0.5,
+                patience=10,
+                min_lr=1e-6,
+                verbose=0,
+            ),
+        ]
+
         model = build_lstm_model(LOOKBACK)
-        model.fit(
+        history = model.fit(
             X_train, y_train,
+            validation_data=(X_val, y_val),
             epochs=EPOCHS,
             batch_size=BATCH_SIZE,
+            callbacks=callbacks,
             verbose=0,
         )
 
+        best_epoch = len(history.history['loss'])
+        best_val   = min(history.history['val_loss'])
         trained[state] = (model, s_min, s_max, scaled, n_train)
-        print(f"done")
+        print(f"done (epoch {best_epoch}, val_loss={best_val:.6f})")
 
     return trained
 
 
 def evaluate_lstm(trained: dict, val_df: pd.DataFrame) -> pd.DataFrame:
-    """Evaluate LSTM on validation set per state."""
     from src.evaluate import evaluate, summarise_results
 
     results = []
@@ -114,7 +137,6 @@ def evaluate_lstm(trained: dict, val_df: pd.DataFrame) -> pd.DataFrame:
         if len(val) == 0:
             continue
 
-        # Use last LOOKBACK weeks of train as seed, predict val length
         seed = full_scaled[n_train - LOOKBACK: n_train]
         preds_scaled = []
         current = seed.copy()
@@ -137,7 +159,6 @@ def predict_lstm(
     state:   str,
     periods: int = 8,
 ) -> pd.DataFrame:
-    """Forecast next `periods` weeks for one state."""
     model, s_min, s_max, full_scaled, n_train = trained[state]
 
     seed = full_scaled[-LOOKBACK:]
@@ -151,26 +172,25 @@ def predict_lstm(
         current = np.append(current, p)
 
     forecasts = inverse_scale(np.array(preds_scaled), s_min, s_max)
-
-    last_date = pd.Timestamp("2023-12-04")
-    dates = [last_date + pd.Timedelta(weeks=i + 1) for i in range(periods)]
+    last_date  = pd.Timestamp("2023-12-04")
+    dates      = [last_date + pd.Timedelta(weeks=i + 1) for i in range(periods)]
     return pd.DataFrame({"ds": dates, "forecast": forecasts})
 
 
 def save_lstm(trained: dict):
-    """Save all LSTM models and scalers."""
     scalers = {}
     for state, (model, s_min, s_max, full_scaled, n_train) in trained.items():
         safe = state.replace(" ", "_")
         model.save(ARTIFACTS_DIR / f"lstm_{safe}.keras")
-        scalers[state] = {"s_min": s_min, "s_max": s_max,
-                          "full_scaled": full_scaled, "n_train": n_train}
+        scalers[state] = {
+            "s_min": s_min, "s_max": s_max,
+            "full_scaled": full_scaled, "n_train": n_train,
+        }
     joblib.dump(scalers, ARTIFACTS_DIR / "lstm_scalers.joblib")
     print("LSTM models saved.")
 
 
 def load_lstm(states: list) -> dict:
-    """Load all saved LSTM models and scalers."""
     import tensorflow as tf
     scalers = joblib.load(ARTIFACTS_DIR / "lstm_scalers.joblib")
     trained = {}
@@ -194,13 +214,13 @@ if __name__ == "__main__":
     weekly = resample_weekly(raw)
     train, val = train_val_split(weekly)
 
-    print(f"Training LSTM for all 43 states ({EPOCHS} epochs each)...\n")
+    print(f"Training improved LSTM (lookback={LOOKBACK}, epochs up to {EPOCHS} with early stopping)...\n")
     trained = train_lstm_per_state(train, val)
 
     print("\nEvaluating on validation set...")
     results = evaluate_lstm(trained, val)
 
-    print("\n--- LSTM Results ---")
+    print("\n--- Improved LSTM Results ---")
     print(results.to_string(index=False))
     print(f"\nMean MAPE: {results['mape'].mean():.2f}%")
     print(f"Best state:  {results.loc[results['mape'].idxmin(), 'state']} ({results['mape'].min():.2f}%)")
@@ -211,6 +231,3 @@ if __name__ == "__main__":
 
     results.to_csv(ARTIFACTS_DIR / "lstm_results.csv", index=False)
     print("Results saved to artifacts/lstm_results.csv")
-
-    print("\nSample 8-week forecast for California:")
-    print(predict_lstm(trained, "California").to_string(index=False))
