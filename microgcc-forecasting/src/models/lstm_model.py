@@ -11,8 +11,8 @@ ARTIFACTS_DIR.mkdir(exist_ok=True)
 
 LOOKBACK   = 12    # was 12 — captures 6 months of history
 FORECAST_H = 8
-EPOCHS     = 300   # was 100 — early stopping will kick in before this
-BATCH_SIZE = 16    # was 32 — smaller batches = better gradient updates on small series
+EPOCHS     = 100   # was 100 — early stopping will kick in before this
+BATCH_SIZE = 32    # was 32 — smaller batches = better gradient updates on small series
 
 
 def build_sequences(series: np.ndarray, lookback: int):
@@ -36,22 +36,16 @@ def inverse_scale(scaled, s_min, s_max):
 def build_lstm_model(lookback: int):
     import tensorflow as tf
     from tensorflow.keras.models import Sequential
-    from tensorflow.keras.layers import LSTM, Dense, Dropout, Bidirectional
+    from tensorflow.keras.layers import LSTM, Dense, Dropout
 
     model = Sequential([
-        Bidirectional(LSTM(128, return_sequences=True), input_shape=(lookback, 1)),
-        Dropout(0.2),
-        LSTM(64, return_sequences=True),
+        LSTM(64, return_sequences=True, input_shape=(lookback, 1)),
         Dropout(0.2),
         LSTM(32, return_sequences=False),
-        Dropout(0.1),
-        Dense(16, activation='relu'),
+        Dropout(0.2),
         Dense(1),
     ])
-    model.compile(
-        optimizer=tf.keras.optimizers.Adam(learning_rate=0.001),
-        loss='huber',       # more robust to outliers than MSE
-    )
+    model.compile(optimizer="adam", loss="mse")
     return model
 
 
@@ -116,7 +110,6 @@ def train_lstm_per_state(
             validation_data=(X_val, y_val),
             epochs=EPOCHS,
             batch_size=BATCH_SIZE,
-            callbacks=callbacks,
             verbose=0,
         )
 

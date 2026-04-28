@@ -105,11 +105,11 @@ def get_arima():
 
 
 def get_xgb():
-    global _xgb_model, _xgb_le
+    global _xgb_model, _xgb_le, _xgb_scalers
     if _xgb_model is None:
         from src.models.xgboost_model import load_xgboost
-        _xgb_model, _xgb_le = load_xgboost()
-    return _xgb_model, _xgb_le
+        _xgb_model, _xgb_le, _xgb_scalers = load_xgboost()
+    return _xgb_model, _xgb_le, _xgb_scalers
 
 
 # ── Schemas ────────────────────────────────────────────────────────────────────
