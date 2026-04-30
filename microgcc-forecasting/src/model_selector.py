@@ -6,12 +6,12 @@ ARTIFACTS_DIR = Path(__file__).resolve().parents[1] / "artifacts"
 
 
 def load_all_results() -> pd.DataFrame:
-    """Load result CSVs for all 4 models and combine into one DataFrame."""
     files = {
-        "prophet":  ARTIFACTS_DIR / "prophet_results.csv",
-        "arima":    ARTIFACTS_DIR / "arima_results.csv",
-        "xgboost":  ARTIFACTS_DIR / "xgboost_results.csv",
-        "lstm":     ARTIFACTS_DIR / "lstm_results.csv",
+        "prophet":     ARTIFACTS_DIR / "prophet_results.csv",
+        "arima":       ARTIFACTS_DIR / "arima_results.csv",
+        "xgboost":     ARTIFACTS_DIR / "xgboost_results.csv",
+        "lstm":        ARTIFACTS_DIR / "lstm_results.csv",
+        "holtwinters": ARTIFACTS_DIR / "holtwinters_results.csv",  # add this
     }
     frames = []
     for name, path in files.items():
