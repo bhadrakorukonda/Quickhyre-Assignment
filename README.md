@@ -11,13 +11,14 @@ Built as part of the Microgcc Data Science Apprenticeship assignment.
 
 | Model | Mean MAPE | States Won |
 |-------|-----------|------------|
-| **LSTM** | **7.81%** | **35** |
-| ARIMA/SARIMA | 16.53% | 8 |
+| **LSTM** | **7.72%** | **32** |
+| ARIMA/SARIMA | 16.53% | 11 |
+| Holt-Winters ETS | 20.45% | 0 |
 | Facebook Prophet | 33.84% | 0 |
-| XGBoost | 44.70% | 0 |
+| XGBoost | 47.75% | 0 |
 
-LSTM was automatically selected as the best model for 35 of 43 states.
-ARIMA won the remaining 8 states (Arizona 4.20%, Iowa 4.78%, Nebraska 5.04%).
+LSTM was automatically selected as the best model for 32 of 43 states.
+ARIMA won the remaining 11 states (Arizona 4.20%, Iowa 4.78%, Nebraska 5.04%).
 
 ---
 

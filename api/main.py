@@ -29,7 +29,7 @@ for 43 US states using an ensemble of trained time-series models.
 |-------|-----------|------------|
 | **LSTM** | **7.72%** | **32** |
 | ARIMA/SARIMA | 16.53% | 11 |
-| Holt-Winters ETS | TBD | TBD |
+| Holt-Winters ETS | 20.45% | 0 |
 | Facebook Prophet | 33.84% | 0 |
 | XGBoost | 47.75% | 0 |
 
